@@ -6,11 +6,7 @@ on:
   issue_comment:
     types: [created]
 
-permissions:
-  contents: read
-  pull-requests: write
-  issues: write
-  checks: write
+# Not: pull_request_target KULLANMIYORUZ (secret sızıntısı riski yüksek)
 
 concurrency:
   group: code-review-${{ github.event.pull_request.number || github.ref }}
@@ -19,11 +15,16 @@ concurrency:
 jobs:
   # -------------------------------------------------
   # 1. AI Code Review (PR-Agent)
+  # Secret sadece bu job'da kullanılıyor
   # -------------------------------------------------
   ai-review:
-    if: github.event.pull_request.draft == false
+    if: github.event.pull_request.draft == false && github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     name: AI Review (PR-Agent)
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -36,7 +37,6 @@ jobs:
           OPENAI_KEY: ${{ secrets.OPENAI_API_KEY }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          # Ana komutlar
           pr_reviewer.require_tests_review: true
           pr_reviewer.require_security_review: true
           pr_reviewer.extra_instructions: |
@@ -47,27 +47,30 @@ jobs:
             - Code readability and maintainability
             - Breaking changes
             Be concise. Prefer concrete suggestions over general advice.
-          # Sadece önemli yorumları bırak
           pr_reviewer.inline_code_comments: true
           pr_reviewer.num_code_suggestions: 4
 
   # -------------------------------------------------
   # 2. Linter Results → PR Comments (Reviewdog)
+  # Bu job secret kullanmaz
   # -------------------------------------------------
   lint-review:
-    if: github.event.pull_request.draft == false
+    if: github.event.pull_request.draft == false && github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     name: Lint → Reviewdog
+    permissions:
+      contents: read
+      pull-requests: write
+      checks: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Node (örnek - projenin diline göre değiştir)
+      - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: '20'
 
-      # Örnek: ESLint. Kendi linter'ını buraya koy.
       - name: Install & Lint
         run: |
           npm ci || true
@@ -80,13 +83,14 @@ jobs:
           reporter: github-pr-review
           eslint_flags: '.'
           fail_on_error: false
-          filter_mode: added   # sadece değişen satırlar
+          filter_mode: added
 
   # -------------------------------------------------
   # 3. Security - CodeQL (GitHub native)
+  # Bu job secret kullanmaz
   # -------------------------------------------------
   codeql:
-    if: github.event.pull_request.draft == false
+    if: github.event.pull_request.draft == false && github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     name: CodeQL Security
     permissions:
@@ -100,7 +104,7 @@ jobs:
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v3
         with:
-          languages: javascript, typescript, python  # ihtiyacına göre düzenle
+          languages: javascript, typescript, python
 
       - name: Autobuild
         uses: github/codeql-action/autobuild@v3
@@ -109,7 +113,8 @@ jobs:
         uses: github/codeql-action/analyze@v3
 
   # -------------------------------------------------
-  # 4. (Opsiyonel) Manuel komut: /review yorumu
+  # 4. Manuel /review komutu
+  # Secret sadece burada da kullanılıyor
   # -------------------------------------------------
   manual-review:
     if: |
@@ -118,6 +123,10 @@ jobs:
       github.event.issue.pull_request
     runs-on: ubuntu-latest
     name: Manual /review trigger
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
