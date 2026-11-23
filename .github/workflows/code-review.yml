@@ -1,0 +1,134 @@
+name: AI + Classic Code Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+  checks: write
+
+concurrency:
+  group: code-review-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # -------------------------------------------------
+  # 1. AI Code Review (PR-Agent)
+  # -------------------------------------------------
+  ai-review:
+    if: github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    name: AI Review (PR-Agent)
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: PR Agent - Review
+        uses: Codium-ai/pr-agent@main
+        env:
+          OPENAI_KEY: ${{ secrets.OPENAI_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          # Ana komutlar
+          pr_reviewer.require_tests_review: true
+          pr_reviewer.require_security_review: true
+          pr_reviewer.extra_instructions: |
+            Focus on:
+            - Logic errors and edge cases
+            - Security issues (injection, auth, secrets)
+            - Performance problems
+            - Code readability and maintainability
+            - Breaking changes
+            Be concise. Prefer concrete suggestions over general advice.
+          # Sadece önemli yorumları bırak
+          pr_reviewer.inline_code_comments: true
+          pr_reviewer.num_code_suggestions: 4
+
+  # -------------------------------------------------
+  # 2. Linter Results → PR Comments (Reviewdog)
+  # -------------------------------------------------
+  lint-review:
+    if: github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    name: Lint → Reviewdog
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node (örnek - projenin diline göre değiştir)
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # Örnek: ESLint. Kendi linter'ını buraya koy.
+      - name: Install & Lint
+        run: |
+          npm ci || true
+          npx eslint . --format json --output-file eslint-report.json || true
+
+      - name: Reviewdog - ESLint
+        uses: reviewdog/action-eslint@v1
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          reporter: github-pr-review
+          eslint_flags: '.'
+          fail_on_error: false
+          filter_mode: added   # sadece değişen satırlar
+
+  # -------------------------------------------------
+  # 3. Security - CodeQL (GitHub native)
+  # -------------------------------------------------
+  codeql:
+    if: github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    name: CodeQL Security
+    permissions:
+      security-events: write
+      contents: read
+      actions: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: javascript, typescript, python  # ihtiyacına göre düzenle
+
+      - name: Autobuild
+        uses: github/codeql-action/autobuild@v3
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+
+  # -------------------------------------------------
+  # 4. (Opsiyonel) Manuel komut: /review yorumu
+  # -------------------------------------------------
+  manual-review:
+    if: |
+      github.event_name == 'issue_comment' &&
+      contains(github.event.comment.body, '/review') &&
+      github.event.issue.pull_request
+    runs-on: ubuntu-latest
+    name: Manual /review trigger
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: refs/pull/${{ github.event.issue.number }}/head
+          fetch-depth: 0
+
+      - name: PR Agent - Manual Review
+        uses: Codium-ai/pr-agent@main
+        env:
+          OPENAI_KEY: ${{ secrets.OPENAI_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          pr_reviewer.extra_instructions: "User requested a fresh review with /review command."
